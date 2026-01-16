@@ -1,0 +1,15 @@
+# Rust
+target/
+Cargo.lock
+
+# macOS
+.DS_Store
+
+# Logs / outputs
+*.log
+*.out
+
+# Experiments / temporary data
+data/
+results/
+/target
