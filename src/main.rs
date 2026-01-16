@@ -1,10 +1,10 @@
-use hello_rust::keygen::{kgen, setup};
-use hello_rust::protocol::{combine, sig1, sig2, sig3_with_pk, verify};
-use hello_rust::timed::{timed_encrypt, timed_decrypt, derive_h as timed_derive_h, TimedParams};
-use hello_rust::commitment::{
+use threshold_signature::keygen::{kgen, setup};
+use threshold_signature::protocol::{combine, sig1, sig2, sig3_with_pk, verify};
+use threshold_signature::timed::{timed_encrypt, timed_decrypt, derive_h as timed_derive_h, TimedParams};
+use threshold_signature::commitment::{
     commit_z, derive_h_from_g, aggregate_commitments, aggregate_openings, verify_aggregate,
 };
-use hello_rust::tracing::{setup_admitter, admitter_issue_token, trace_encrypt, trace_decrypt};
+use threshold_signature::tracing::{setup_admitter, admitter_issue_token, trace_encrypt, trace_decrypt};
 
 use num_bigint::BigUint;
 use std::time::{Duration, Instant};
