@@ -14,5 +14,13 @@ cargo build
 
 cargo run --release
 
-git add README.md
-git add README.md
+Notes
+
+This implementation is a research prototype.
+
+Parameters are chosen for experimental evaluation.
+
+The code is not optimized or hardened for production use.
+License
+
+MIT License.
