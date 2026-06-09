@@ -55,14 +55,34 @@ pub fn enc_scalar(s: &Scalar) -> [u8; 32] {
     s.to_bytes()
 }
 
-/// Hcom(i, rho, B) -> mu  (paper: Hcom : {0,1}^λ × G -> R)
-pub fn hcom(i: u32, rho: &[u8; 32], b: &RistrettoPoint) -> [u8; 32] {
+fn encode_signer_set(buf: &mut Vec<u8>, signer_set: &[u32]) {
+    for id in signer_set {
+        buf.extend_from_slice(&id.to_le_bytes());
+    }
+}
+
+/// Hbind(sid || S || m || i || rho_i || B_i) -> mu_i.
+pub fn hbind(
+    sid: &[u8; 32],
+    signer_set: &[u32],
+    message: &[u8],
+    i: u32,
+    rho: &[u8; 32],
+    b: &RistrettoPoint,
+) -> [u8; 32] {
     let mut buf = Vec::new();
-    buf.extend_from_slice(b"Gargos::Hcom");
+    buf.extend_from_slice(sid);
+    encode_signer_set(&mut buf, signer_set);
+    buf.extend_from_slice(message);
     buf.extend_from_slice(&i.to_le_bytes());
     buf.extend_from_slice(rho);
     buf.extend_from_slice(&enc_point(b));
-    hash_32(b"Hcom", &buf)
+    hash_32(b"Hbind", &buf)
+}
+
+pub fn hcom(i: u32, rho: &[u8; 32], b: &RistrettoPoint) -> [u8; 32] {
+    let empty_sid = [0u8; 32];
+    hbind(&empty_sid, &[], &[], i, rho, b)
 }
 
 /// F0, F1 : {0,1}^λ -> G
@@ -96,13 +116,26 @@ pub fn g1(message: &[u8], mu_vec: &[(u32, [u8; 32])]) -> RistrettoPoint {
     hash_to_point(b"Gargos::G1", &buf)
 }
 
-/// Hsig : G^2 × M -> Zp (we use scalar)
-pub fn hsig(a_hat: &RistrettoPoint, pk: &RistrettoPoint, message: &[u8]) -> Scalar {
+/// Hsig(sid || S || A_hat || X || m) -> Z_q.
+pub fn hsig_bound(
+    sid: &[u8; 32],
+    signer_set: &[u32],
+    a_hat: &RistrettoPoint,
+    pk: &RistrettoPoint,
+    message: &[u8],
+) -> Scalar {
     let mut buf = Vec::new();
+    buf.extend_from_slice(sid);
+    encode_signer_set(&mut buf, signer_set);
     buf.extend_from_slice(&enc_point(a_hat));
     buf.extend_from_slice(&enc_point(pk));
     buf.extend_from_slice(message);
     hash_to_scalar(b"Gargos::Hsig", &buf)
+}
+
+pub fn hsig(a_hat: &RistrettoPoint, pk: &RistrettoPoint, message: &[u8]) -> Scalar {
+    let empty_sid = [0u8; 32];
+    hsig_bound(&empty_sid, &[], a_hat, pk, message)
 }
 
 /// HFS for Fiat-Shamir in Σ-protocol (Fig.4, line 4).
@@ -128,6 +161,38 @@ pub fn hfs(
     buf.extend_from_slice(&enc_point(g1));
     buf.extend_from_slice(rho);
     hash_to_scalar(b"Gargos::HFS", &buf)
+}
+
+pub fn hfs_wit(
+    xa: &RistrettoPoint,
+    xb: &RistrettoPoint,
+    xpk: &RistrettoPoint,
+    xw: &RistrettoPoint,
+    a: &RistrettoPoint,
+    b: &RistrettoPoint,
+    pk: &RistrettoPoint,
+    w: &RistrettoPoint,
+    g0: &RistrettoPoint,
+    g1: &RistrettoPoint,
+    rho: &[u8; 32],
+    c: &Scalar,
+    lagrange: &Scalar,
+) -> Scalar {
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&enc_point(xa));
+    buf.extend_from_slice(&enc_point(xb));
+    buf.extend_from_slice(&enc_point(xpk));
+    buf.extend_from_slice(&enc_point(xw));
+    buf.extend_from_slice(&enc_point(a));
+    buf.extend_from_slice(&enc_point(b));
+    buf.extend_from_slice(&enc_point(pk));
+    buf.extend_from_slice(&enc_point(w));
+    buf.extend_from_slice(&enc_point(g0));
+    buf.extend_from_slice(&enc_point(g1));
+    buf.extend_from_slice(rho);
+    buf.extend_from_slice(&enc_scalar(c));
+    buf.extend_from_slice(&enc_scalar(lagrange));
+    hash_to_scalar(b"Gargos::HFSWit", &buf)
 }
 
 /// Deterministically derive "random generators" h, v (paper samples them randomly in Setup).

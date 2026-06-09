@@ -11,5 +11,11 @@ Cargo.lock
 
 # Experiments / temporary data
 data/
-results/
+results/*
+!results/experiment_results.csv
+!results/experiment_summary.md
+!results/scalability_analysis.md
+!results/profiling_summary.md
+!results/plots/
+!results/plots/*.png
 /target

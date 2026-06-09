@@ -2,7 +2,7 @@ use curve25519_dalek::ristretto::RistrettoPoint;
 use curve25519_dalek::scalar::Scalar;
 use serde::{Deserialize, Serialize};
 
-use crate::hash::{f0, f1, hfs};
+use crate::hash::{f0, f1, hfs, hfs_wit};
 use crate::types::{Params, SecretKeyShare};
 
 /// Proof π := (XA, XB, Xpk, za, zs, zr, zu) as in Fig.4.:contentReference[oaicite:6]{index=6}
@@ -11,6 +11,18 @@ pub struct Proof {
     pub xa: [u8; 32],
     pub xb: [u8; 32],
     pub xpk: [u8; 32],
+    pub za: [u8; 32],
+    pub zs: [u8; 32],
+    pub zr: [u8; 32],
+    pub zu: [u8; 32],
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WitnessProof {
+    pub xa: [u8; 32],
+    pub xb: [u8; 32],
+    pub xpk: [u8; 32],
+    pub xw: [u8; 32],
     pub za: [u8; 32],
     pub zs: [u8; 32],
     pub zr: [u8; 32],
@@ -130,4 +142,100 @@ pub fn sig_verify(
     let right3 = xpk + (*pk_i) * e;
 
     left1 == right1 && left2 == right2 && left3 == right3
+}
+
+pub fn witness_prove(
+    par: &Params,
+    pk_i: &RistrettoPoint,
+    a_i_point: &RistrettoPoint,
+    b_i: &RistrettoPoint,
+    w_i: &RistrettoPoint,
+    g0: &RistrettoPoint,
+    g1: &RistrettoPoint,
+    rho: &[u8; 32],
+    c: &Scalar,
+    lagrange: &Scalar,
+    a: &Scalar,
+    sk: &SecretKeyShare,
+) -> WitnessProof {
+    let h0 = f0(rho);
+    let h1 = f1(rho);
+
+    let a_hat = crate::randutil::random_scalar();
+    let s_hat = crate::randutil::random_scalar();
+    let r_hat = crate::randutil::random_scalar();
+    let u_hat = crate::randutil::random_scalar();
+
+    let xa = par.g * a_hat + (*g0) * r_hat + (*g1) * u_hat;
+    let xb = par.g * a_hat + h0 * r_hat + h1 * u_hat;
+    let xpk = par.g * s_hat + par.h * r_hat + par.v * u_hat;
+    let xw = par.g * ((*lagrange) * (a_hat + (*c) * s_hat));
+
+    let e = hfs_wit(
+        &xa, &xb, &xpk, &xw, a_i_point, b_i, pk_i, w_i, g0, g1, rho, c, lagrange,
+    );
+
+    WitnessProof {
+        xa: enc_point(&xa),
+        xb: enc_point(&xb),
+        xpk: enc_point(&xpk),
+        xw: enc_point(&xw),
+        za: enc_scalar(&(a_hat + (*a) * e)),
+        zs: enc_scalar(&(s_hat + sk.s * e)),
+        zr: enc_scalar(&(r_hat + sk.r * e)),
+        zu: enc_scalar(&(u_hat + sk.u * e)),
+    }
+}
+
+pub fn witness_verify(
+    par: &Params,
+    pk_i: &RistrettoPoint,
+    a_i_point: &RistrettoPoint,
+    b_i: &RistrettoPoint,
+    w_i: &RistrettoPoint,
+    g0: &RistrettoPoint,
+    g1: &RistrettoPoint,
+    rho: &[u8; 32],
+    c: &Scalar,
+    lagrange: &Scalar,
+    proof: &WitnessProof,
+) -> bool {
+    let xa = match dec_point(&proof.xa) {
+        Some(p) => p,
+        None => return false,
+    };
+    let xb = match dec_point(&proof.xb) {
+        Some(p) => p,
+        None => return false,
+    };
+    let xpk = match dec_point(&proof.xpk) {
+        Some(p) => p,
+        None => return false,
+    };
+    let xw = match dec_point(&proof.xw) {
+        Some(p) => p,
+        None => return false,
+    };
+
+    let za = dec_scalar(&proof.za);
+    let zs = dec_scalar(&proof.zs);
+    let zr = dec_scalar(&proof.zr);
+    let zu = dec_scalar(&proof.zu);
+
+    let h0 = f0(rho);
+    let h1 = f1(rho);
+    let e = hfs_wit(
+        &xa, &xb, &xpk, &xw, a_i_point, b_i, pk_i, w_i, g0, g1, rho, c, lagrange,
+    );
+
+    let left1 = par.g * za + (*g0) * zr + (*g1) * zu;
+    let right1 = xa + (*a_i_point) * e;
+    let left2 = par.g * za + h0 * zr + h1 * zu;
+    let right2 = xb + (*b_i) * e;
+    let left3 = par.g * zs + par.h * zr + par.v * zu;
+    let right3 = xpk + (*pk_i) * e;
+    let left4 = par.g * ((*lagrange) * (za + (*c) * zs));
+    let right4 = xw + (*w_i) * e;
+
+    left1 == right1 && left2 == right2 && left3 == right3 && left4 == right4
 }
