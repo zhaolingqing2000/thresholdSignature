@@ -1,29 +1,7 @@
-# thresholdSignature
+# 🚧 Coming Soon
 
-Rust prototype implementation of a Gargos-style threshold Schnorr signature
-scheme with optional verifiable combining (VC), verifiably timed combining,
-and message-dependent authorized tracing.
+The implementation associated with this paper will be released upon acceptance.
 
-This repository accompanies an academic research project and is intended for
-experimental evaluation rather than production deployment.
+This repository is currently under preparation.
 
-Run Experiments
----------------
-
-bash
-
-cargo run --release
-
-Notes
------
-
-This implementation is a research prototype.
-
-Parameters are chosen for experimental evaluation.
-
-The code is not optimized or hardened for production use.
-
-License
--------
-
-MIT License.
+Thank you for your interest.
