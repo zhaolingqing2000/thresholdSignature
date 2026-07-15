@@ -1,0 +1,6 @@
+component,avg_ms,median_ms,std_ms,p95_ms
+Commitment generation,0.090518,0.058664,0.279926,0.125066
+HTLP generation,0.001490,0.001464,0.000318,0.001599
+IBE encryption,0.001151,0.001158,0.000078,0.001198
+NIZK proof generation,0.008361,0.007076,0.018512,0.008523
+Nullifier computation,0.000390,0.000389,0.000007,0.000393

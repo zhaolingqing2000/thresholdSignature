@@ -1,0 +1,41 @@
+% Generated from results/experiment_results.csv
+\begin{table}[t]
+\centering
+\caption{End-to-end runtime comparison.}
+\label{tab:new-runtime}
+\small
+\begin{tabular}{lrrrr}
+\toprule
+Mode & $|S|$ & Sign & Verify & Total \\
+\midrule
+baseline\_gargos & 4 & 2.563 & 0.067 & 4.542 \\
+full\_construction & 4 & 4.732 & 0.197 & 5.905 \\
+baseline\_gargos & 8 & 5.052 & 0.068 & 9.380 \\
+full\_construction & 8 & 9.926 & 0.257 & 11.603 \\
+baseline\_gargos & 16 & 10.569 & 0.068 & 18.365 \\
+full\_construction & 16 & 19.346 & 0.375 & 22.082 \\
+baseline\_gargos & 32 & 21.359 & 0.067 & 36.353 \\
+full\_construction & 32 & 38.634 & 0.627 & 43.728 \\
+baseline\_gargos & 64 & 43.557 & 0.068 & 73.671 \\
+full\_construction & 64 & 78.391 & 1.135 & 87.760 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[t]
+\centering
+\caption{Communication overhead from serialized records.}
+\label{tab:new-communication}
+\small
+\begin{tabular}{rrrrr}
+\toprule
+$|S|$ & Baseline bytes & Full bytes & Additional bytes & Ratio \\
+\midrule
+4 & 1564 & 3676 & 2112 & 2.35x \\
+8 & 3020 & 6812 & 3792 & 2.26x \\
+16 & 5932 & 13084 & 7152 & 2.21x \\
+32 & 11756 & 25628 & 13872 & 2.18x \\
+64 & 23404 & 50716 & 27312 & 2.17x \\
+\bottomrule
+\end{tabular}
+\end{table}

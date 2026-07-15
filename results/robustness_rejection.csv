@@ -1,0 +1,13 @@
+test,trials,rejected,rate_percent
+modified commitment,1000,1000,100.00
+modified puzzle,1000,1000,100.00
+modified ciphertext,1000,1000,100.00
+modified nullifier,1000,1000,100.00
+modified proof,1000,1000,100.00
+modified message,1000,1000,100.00
+modified session digest,1000,1000,100.00
+modified aggregate response,1000,1000,100.00
+duplicate nullifier,1000,1000,100.00
+missing handle,1000,1000,100.00
+cross-session handle,1000,1000,100.00
+wrong tracing key,1000,1000,100.00
