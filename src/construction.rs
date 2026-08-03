@@ -13,6 +13,14 @@ use crate::randutil::random_scalar;
 use crate::shamir::lagrange_coeff;
 use crate::types::{Params, PublicKeyShare, SecretKeyShare};
 
+#[cfg(feature = "concrete-ibe")]
+use crate::crypto::ibe_backend::{
+    ConcreteIbeBackend, ConcreteIbeMasterKey, ConcreteIbePublicKey, ConcreteIbeUserKey,
+    ConcreteTracingCiphertext,
+};
+#[cfg(feature = "concrete-lhtlp")]
+use crate::crypto::lhtlp::{LhtlpBackend, LhtlpPuzzle};
+
 #[derive(Clone)]
 pub struct ConstructionPublicParams {
     pub gargos: Params,
@@ -21,6 +29,8 @@ pub struct ConstructionPublicParams {
     pub g_c: RistrettoPoint,
     pub h_c: RistrettoPoint,
     pub ibe_public: IbePublicKey,
+    #[cfg(feature = "concrete-lhtlp")]
+    pub lhtlp: LhtlpBackend,
 }
 
 #[derive(Clone)]
@@ -65,28 +75,44 @@ pub struct PrivateResponsePackage {
     pub tau_i: Scalar,
 }
 
+#[cfg(not(feature = "concrete-lhtlp"))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AdditivePuzzle {
     value: [u8; 32],
     nonce: [u8; 32],
 }
 
+#[cfg(feature = "concrete-lhtlp")]
+pub type AdditivePuzzle = LhtlpPuzzle;
+
+#[cfg(not(feature = "concrete-ibe"))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IbePublicKey {
     seed: [u8; 32],
 }
 
+#[cfg(feature = "concrete-ibe")]
+pub type IbePublicKey = ConcreteIbePublicKey;
+
+#[cfg(not(feature = "concrete-ibe"))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IbeMasterKey {
     seed: [u8; 32],
 }
 
+#[cfg(feature = "concrete-ibe")]
+pub type IbeMasterKey = ConcreteIbeMasterKey;
+
+#[cfg(not(feature = "concrete-ibe"))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TracingCiphertext {
     id_hash: [u8; 32],
     nonce: [u8; 32],
     body: [u8; 4],
 }
+
+#[cfg(feature = "concrete-ibe")]
+pub type TracingCiphertext = ConcreteTracingCiphertext;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BindingProof {
@@ -173,6 +199,22 @@ fn scalar_from_bytes(bytes: &[u8; 32]) -> Scalar {
     Scalar::from_bytes_mod_order(*bytes)
 }
 
+#[cfg(feature = "concrete-lhtlp")]
+fn scalar_to_lhtlp_plaintext(value: &Scalar) -> [u8; 32] {
+    let mut bytes = enc_scalar(value);
+    bytes.reverse();
+    bytes
+}
+
+#[cfg(feature = "concrete-lhtlp")]
+fn scalar_from_lhtlp_plaintext(opened: &[u8]) -> Scalar {
+    let mut be = [0u8; 32];
+    let take = opened.len().min(32);
+    be[32 - take..].copy_from_slice(&opened[opened.len() - take..]);
+    be.reverse();
+    scalar_from_bytes(&be)
+}
+
 fn encode_u32(buf: &mut Vec<u8>, value: u32) {
     buf.extend_from_slice(&value.to_le_bytes());
 }
@@ -186,15 +228,31 @@ fn encode_bytes(buf: &mut Vec<u8>, bytes: &[u8]) {
     buf.extend_from_slice(bytes);
 }
 
+#[cfg(not(feature = "concrete-lhtlp"))]
 fn encode_puzzle(buf: &mut Vec<u8>, puzzle: &AdditivePuzzle) {
     buf.extend_from_slice(&puzzle.value);
     buf.extend_from_slice(&puzzle.nonce);
 }
 
+#[cfg(feature = "concrete-lhtlp")]
+fn encode_puzzle(buf: &mut Vec<u8>, puzzle: &AdditivePuzzle) {
+    encode_bytes(buf, &puzzle.u);
+    encode_bytes(buf, &puzzle.v);
+}
+
+#[cfg(not(feature = "concrete-ibe"))]
 fn encode_trace(buf: &mut Vec<u8>, ct: &TracingCiphertext) {
     buf.extend_from_slice(&ct.id_hash);
     buf.extend_from_slice(&ct.nonce);
     buf.extend_from_slice(&ct.body);
+}
+
+#[cfg(feature = "concrete-ibe")]
+fn encode_trace(buf: &mut Vec<u8>, ct: &TracingCiphertext) {
+    encode_bytes(buf, &ct.identity_digest);
+    encode_bytes(buf, &ct.kem_ciphertext);
+    buf.extend_from_slice(&ct.nonce);
+    encode_bytes(buf, &ct.aead_ciphertext);
 }
 
 fn encode_handle_without_proof(buf: &mut Vec<u8>, h: &AuxiliaryHandle) {
@@ -250,14 +308,23 @@ pub fn nullifier(d: &[u8; 32], s_i: &Scalar) -> [u8; 32] {
     h32(b"H_null", &[d, &enc_scalar(s_i)])
 }
 
-pub fn puzzle_gen(value: &Scalar) -> AdditivePuzzle {
+#[cfg(not(feature = "concrete-lhtlp"))]
+pub fn puzzle_gen(_pp: &ConstructionPublicParams, value: &Scalar) -> AdditivePuzzle {
     AdditivePuzzle {
         value: enc_scalar(value),
         nonce: rand::random(),
     }
 }
 
-pub fn puzzle_eval(puzzles: &[AdditivePuzzle]) -> AdditivePuzzle {
+#[cfg(feature = "concrete-lhtlp")]
+pub fn puzzle_gen(pp: &ConstructionPublicParams, value: &Scalar) -> AdditivePuzzle {
+    pp.lhtlp
+        .pgen_bytes(&scalar_to_lhtlp_plaintext(value))
+        .expect("concrete LHTLP PGen failed")
+}
+
+#[cfg(not(feature = "concrete-lhtlp"))]
+pub fn puzzle_eval(_pp: &ConstructionPublicParams, puzzles: &[AdditivePuzzle]) -> AdditivePuzzle {
     let mut sum = Scalar::ZERO;
     let mut transcript = Vec::with_capacity(puzzles.len() * 64);
     for p in puzzles {
@@ -271,16 +338,45 @@ pub fn puzzle_eval(puzzles: &[AdditivePuzzle]) -> AdditivePuzzle {
     }
 }
 
-pub fn puzzle_solve(puzzle: &AdditivePuzzle) -> Scalar {
+#[cfg(feature = "concrete-lhtlp")]
+pub fn puzzle_eval(pp: &ConstructionPublicParams, puzzles: &[AdditivePuzzle]) -> AdditivePuzzle {
+    pp.lhtlp
+        .peval(puzzles)
+        .expect("concrete LHTLP PEval failed")
+}
+
+#[cfg(not(feature = "concrete-lhtlp"))]
+pub fn puzzle_solve(_pp: &ConstructionPublicParams, puzzle: &AdditivePuzzle) -> Scalar {
     scalar_from_bytes(&puzzle.value)
 }
 
+#[cfg(feature = "concrete-lhtlp")]
+pub fn puzzle_solve(pp: &ConstructionPublicParams, puzzle: &AdditivePuzzle) -> Scalar {
+    let (opened, _) = pp
+        .lhtlp
+        .psolve(puzzle)
+        .expect("concrete LHTLP PSolve failed");
+    scalar_from_lhtlp_plaintext(&opened)
+}
+
+#[cfg(not(feature = "concrete-ibe"))]
 pub fn ibe_setup() -> (IbePublicKey, IbeMasterKey) {
     let seed: [u8; 32] = rand::random();
     (IbePublicKey { seed }, IbeMasterKey { seed })
 }
 
-pub fn ibe_encrypt(pk: &IbePublicKey, message: &[u8], signer_id: u32) -> TracingCiphertext {
+#[cfg(feature = "concrete-ibe")]
+pub fn ibe_setup() -> (IbePublicKey, IbeMasterKey) {
+    ConcreteIbeBackend::setup()
+}
+
+#[cfg(not(feature = "concrete-ibe"))]
+pub fn ibe_encrypt(
+    pk: &IbePublicKey,
+    message: &[u8],
+    _descriptor: &[u8; 32],
+    signer_id: u32,
+) -> TracingCiphertext {
     let id = tracing_identity(message);
     let nonce: [u8; 32] = rand::random();
     let key = h32(b"IBE-prototype", &[&pk.seed, &id, &nonce]);
@@ -295,10 +391,33 @@ pub fn ibe_encrypt(pk: &IbePublicKey, message: &[u8], signer_id: u32) -> Tracing
     }
 }
 
+#[cfg(feature = "concrete-ibe")]
+pub fn ibe_encrypt(
+    pk: &IbePublicKey,
+    message: &[u8],
+    descriptor: &[u8; 32],
+    signer_id: u32,
+) -> TracingCiphertext {
+    ConcreteIbeBackend::encrypt(pk, message, descriptor, signer_id)
+        .expect("concrete IBE encryption failed")
+}
+
+#[cfg(not(feature = "concrete-ibe"))]
 pub fn ibe_extract(msk: &IbeMasterKey, message: &[u8]) -> [u8; 32] {
     h32(b"IBE-extract", &[&msk.seed, &tracing_identity(message)])
 }
 
+#[cfg(feature = "concrete-ibe")]
+pub fn ibe_extract(
+    pk: &IbePublicKey,
+    msk: &IbeMasterKey,
+    message: &[u8],
+    descriptor: &[u8; 32],
+) -> ConcreteIbeUserKey {
+    ConcreteIbeBackend::extract(pk, msk, message, descriptor).expect("concrete IBE extract failed")
+}
+
+#[cfg(not(feature = "concrete-ibe"))]
 pub fn ibe_decrypt(dk_m: &[u8; 32], message: &[u8], ct: &TracingCiphertext) -> Option<u32> {
     let id = tracing_identity(message);
     if ct.id_hash != id {
@@ -316,6 +435,7 @@ pub fn ibe_decrypt(dk_m: &[u8; 32], message: &[u8], ct: &TracingCiphertext) -> O
     Some(u32::from_le_bytes(body))
 }
 
+#[cfg(not(feature = "concrete-ibe"))]
 fn ibe_decrypt_with_master(
     msk: &IbeMasterKey,
     message: &[u8],
@@ -331,6 +451,18 @@ fn ibe_decrypt_with_master(
         body[i] ^= key[i];
     }
     Some(u32::from_le_bytes(body))
+}
+
+#[cfg(feature = "concrete-ibe")]
+fn ibe_decrypt_with_master(
+    pk: &IbePublicKey,
+    msk: &IbeMasterKey,
+    message: &[u8],
+    descriptor: &[u8; 32],
+    ct: &TracingCiphertext,
+) -> Option<u32> {
+    let usk = ibe_extract(pk, msk, message, descriptor);
+    ConcreteIbeBackend::decrypt(pk, &usk, message, descriptor, ct).ok()
 }
 
 fn commitment(pp: &ConstructionPublicParams, z_i: &Scalar, tau_i: &Scalar) -> RistrettoPoint {
@@ -412,7 +544,10 @@ fn validate_record_shape_with_desc(
     true
 }
 
-fn aggregate_record(record: &CanonicalSessionRecord) -> Option<RecordAggregate> {
+fn aggregate_record(
+    pp: &ConstructionPublicParams,
+    record: &CanonicalSessionRecord,
+) -> Option<RecordAggregate> {
     let mut c_point = RistrettoPoint::identity();
     let mut z_puzzles = Vec::with_capacity(record.handles.len());
     let mut tau_puzzles = Vec::with_capacity(record.handles.len());
@@ -423,8 +558,8 @@ fn aggregate_record(record: &CanonicalSessionRecord) -> Option<RecordAggregate> 
     }
     Some(RecordAggregate {
         c_point,
-        t_z: puzzle_eval(&z_puzzles),
-        t_tau: puzzle_eval(&tau_puzzles),
+        t_z: puzzle_eval(pp, &z_puzzles),
+        t_tau: puzzle_eval(pp, &tau_puzzles),
     })
 }
 
@@ -459,6 +594,14 @@ pub fn setup_construction(
     n: usize,
     t: usize,
 ) -> (ConstructionPublicParams, ConstructionSecretState, Registry) {
+    setup_construction_with_lhtlp_delta(n, t, 1 << 16)
+}
+
+pub fn setup_construction_with_lhtlp_delta(
+    n: usize,
+    t: usize,
+    lhtlp_delta: u64,
+) -> (ConstructionPublicParams, ConstructionSecretState, Registry) {
     let gargos = keygen::setup(n, t);
     let (public_key, public_key_shares, secret_key_shares) = keygen::kgen(&gargos);
     let (ibe_public, ibe_master) = ibe_setup();
@@ -469,6 +612,8 @@ pub fn setup_construction(
         g_c: hash_to_point(b"Commitment::g_C"),
         h_c: hash_to_point(b"Commitment::h_C"),
         ibe_public,
+        #[cfg(feature = "concrete-lhtlp")]
+        lhtlp: LhtlpBackend::setup(3072, lhtlp_delta).expect("concrete LHTLP setup failed"),
     };
     let secrets = ConstructionSecretState {
         secret_key_shares,
@@ -579,9 +724,9 @@ pub fn sign_encap(
         let z_i = li * (*a_i + c * sk.s);
         let tau_i = random_scalar();
         let c_i_point = commitment(pp, &z_i, &tau_i);
-        let t_i_z = puzzle_gen(&z_i);
-        let t_i_tau = puzzle_gen(&tau_i);
-        let e_i = ibe_encrypt(&pp.ibe_public, message, i);
+        let t_i_z = puzzle_gen(pp, &z_i);
+        let t_i_tau = puzzle_gen(pp, &tau_i);
+        let e_i = ibe_encrypt(&pp.ibe_public, message, &d, i);
         let nu_i = nullifier(&d, &sk.s);
         let mut handle = AuxiliaryHandle {
             c_i: enc_point(&c_i_point),
@@ -681,9 +826,9 @@ pub fn open(
     d: &[u8; 32],
 ) -> Option<FinalSignaturePackage> {
     let record = checked_record(pp, registry, message, d)?;
-    let aggregate = aggregate_record(record)?;
-    let z = puzzle_solve(&aggregate.t_z);
-    let tau = puzzle_solve(&aggregate.t_tau);
+    let aggregate = aggregate_record(pp, record)?;
+    let z = puzzle_solve(pp, &aggregate.t_z);
+    let tau = puzzle_solve(pp, &aggregate.t_tau);
     final_from_values_with_aggregate(pp, record, z, tau, aggregate)
 }
 
@@ -693,7 +838,7 @@ fn final_from_values(
     z: Scalar,
     tau: Scalar,
 ) -> Option<FinalSignaturePackage> {
-    let aggregate = aggregate_record(record)?;
+    let aggregate = aggregate_record(pp, record)?;
     final_from_values_with_aggregate(pp, record, z, tau, aggregate)
 }
 
@@ -755,10 +900,18 @@ pub fn trace(
         return None;
     }
     let record = registry.retrieve_session_record(&sigma.d)?;
-    let _dk_m = ibe_extract(&secrets.ibe_master, message);
     let mut recovered = BTreeSet::new();
     for h in &record.handles {
+        #[cfg(not(feature = "concrete-ibe"))]
         let i = ibe_decrypt_with_master(&secrets.ibe_master, message, &h.e_i)?;
+        #[cfg(feature = "concrete-ibe")]
+        let i = ibe_decrypt_with_master(
+            &pp.ibe_public,
+            &secrets.ibe_master,
+            message,
+            &sigma.d,
+            &h.e_i,
+        )?;
         if i == 0 || i as usize > pp.gargos.n || !recovered.insert(i) {
             return None;
         }
@@ -784,13 +937,18 @@ pub fn binding_proof_for_benchmark(
     prove_binding(desc, handle)
 }
 
-pub fn puzzle_solve_with_delay_for_benchmark(puzzle: &AdditivePuzzle, delay_iters: u64) -> Scalar {
-    let mut state = h32(b"P_solve_delay", &[&puzzle.value, &puzzle.nonce]);
+pub fn puzzle_solve_with_delay_for_benchmark(
+    pp: &ConstructionPublicParams,
+    puzzle: &AdditivePuzzle,
+    delay_iters: u64,
+) -> Scalar {
+    let puzzle_encoding = puzzle_bytes(puzzle);
+    let mut state = h32(b"P_solve_delay", &[&puzzle_encoding]);
     for _ in 0..delay_iters {
         state = h32(b"P_solve_step", &[&state]);
     }
     let _ = state;
-    puzzle_solve(puzzle)
+    puzzle_solve(pp, puzzle)
 }
 
 pub fn puzzle_bytes(puzzle: &AdditivePuzzle) -> Vec<u8> {
@@ -833,9 +991,10 @@ pub fn aggregate_htlp_bytes(sigma: &FinalSignaturePackage) -> Vec<u8> {
 }
 
 pub fn aggregate_puzzles_for_benchmark(
+    pp: &ConstructionPublicParams,
     record: &CanonicalSessionRecord,
 ) -> Option<(AdditivePuzzle, AdditivePuzzle)> {
-    let aggregate = aggregate_record(record)?;
+    let aggregate = aggregate_record(pp, record)?;
     Some((aggregate.t_z, aggregate.t_tau))
 }
 
@@ -904,16 +1063,42 @@ pub fn robustness_checks_for_benchmark(
         r
     }
 
+    fn mutate_puzzle(puzzle: &mut AdditivePuzzle) {
+        #[cfg(not(feature = "concrete-lhtlp"))]
+        {
+            puzzle.value[0] ^= 1;
+        }
+        #[cfg(feature = "concrete-lhtlp")]
+        {
+            puzzle.u[0] ^= 1;
+        }
+    }
+
+    fn mutate_ciphertext(ct: &mut TracingCiphertext) {
+        #[cfg(not(feature = "concrete-ibe"))]
+        {
+            ct.body[0] ^= 1;
+        }
+        #[cfg(feature = "concrete-ibe")]
+        {
+            ct.aead_ciphertext[0] ^= 1;
+        }
+    }
+
     checks.modified_commitment_rejected = {
         let r = mutate_record(&registry, &out.d, |rec| rec.handles[0].c_i[0] ^= 1);
         !verify(pp, &r, message, &sigma)
     };
     checks.modified_puzzle_rejected = {
-        let r = mutate_record(&registry, &out.d, |rec| rec.handles[0].t_i_z.value[0] ^= 1);
+        let r = mutate_record(&registry, &out.d, |rec| {
+            mutate_puzzle(&mut rec.handles[0].t_i_z)
+        });
         !verify(pp, &r, message, &sigma)
     };
     checks.modified_ciphertext_rejected = {
-        let r = mutate_record(&registry, &out.d, |rec| rec.handles[0].e_i.body[0] ^= 1);
+        let r = mutate_record(&registry, &out.d, |rec| {
+            mutate_ciphertext(&mut rec.handles[0].e_i)
+        });
         trace(pp, secrets, &r, message, &sigma).is_none()
     };
     checks.modified_nullifier_rejected = {
@@ -965,11 +1150,185 @@ pub fn robustness_checks_for_benchmark(
         !verify(pp, &r, message, &sigma)
     };
     checks.wrong_tracing_key_rejected = {
-        let (_, wrong_secrets, _) = setup_construction(pp.gargos.n, pp.gargos.t);
+        let (_, wrong_secrets, _) =
+            setup_construction_with_lhtlp_delta(pp.gargos.n, pp.gargos.t, 64);
         trace(pp, &wrong_secrets, &registry, message, &sigma).is_none()
     };
 
     Some(checks)
+}
+
+pub fn robustness_counts_for_benchmark(
+    pp: &ConstructionPublicParams,
+    secrets: &ConstructionSecretState,
+    message: &[u8],
+    signer_set: &[u32],
+    trials: usize,
+) -> Option<Vec<(String, usize)>> {
+    let mut registry = Registry::default();
+    let out = sign_encap(pp, secrets, &mut registry, message, signer_set)?;
+    let sigma = combine(pp, &registry, message, &out.d, &out.packages)?;
+    let mut other_registry = Registry::default();
+    let other = sign_encap(
+        pp,
+        secrets,
+        &mut other_registry,
+        b"other session",
+        signer_set,
+    )?;
+    let other_handle = other_registry.retrieve_session_record(&other.d)?.handles[0].clone();
+
+    let names = [
+        "wrong message",
+        "wrong descriptor/session digest",
+        "modified commitment",
+        "modified response puzzle",
+        "modified randomizer puzzle",
+        "modified tracing ciphertext",
+        "modified nullifier",
+        "modified binding digest",
+        "modified response",
+        "duplicate nullifier",
+        "missing handle",
+        "cross-session handle",
+        "wrong signer/tracing key",
+        "wrong opening",
+        "duplicate signer",
+        "extra handle",
+        "wrong signer index",
+    ];
+    let mut counts = vec![0usize; names.len()];
+
+    fn mutate_record<F>(registry: &Registry, d: &[u8; 32], f: F) -> Registry
+    where
+        F: FnOnce(&mut CanonicalSessionRecord),
+    {
+        let mut r = registry.clone();
+        let rec = r.records.get_mut(d).expect("record exists");
+        f(rec);
+        rec.record_digest = record_digest(rec);
+        r
+    }
+
+    fn mutate_puzzle(puzzle: &mut AdditivePuzzle) {
+        #[cfg(not(feature = "concrete-lhtlp"))]
+        {
+            puzzle.value[0] ^= 1;
+        }
+        #[cfg(feature = "concrete-lhtlp")]
+        {
+            puzzle.u[0] ^= 1;
+        }
+    }
+
+    fn mutate_ciphertext(ct: &mut TracingCiphertext) {
+        #[cfg(not(feature = "concrete-ibe"))]
+        {
+            ct.body[0] ^= 1;
+        }
+        #[cfg(feature = "concrete-ibe")]
+        {
+            ct.aead_ciphertext[0] ^= 1;
+        }
+    }
+
+    let (_, wrong_secrets, _) = setup_construction_with_lhtlp_delta(pp.gargos.n, pp.gargos.t, 64);
+    for _ in 0..trials {
+        let values = [
+            !verify(pp, &registry, b"wrong message", &sigma),
+            {
+                let mut bad = sigma.clone();
+                bad.d[0] ^= 1;
+                !verify(pp, &registry, message, &bad)
+            },
+            {
+                let r = mutate_record(&registry, &out.d, |rec| rec.handles[0].c_i[0] ^= 1);
+                !verify(pp, &r, message, &sigma)
+            },
+            {
+                let r = mutate_record(&registry, &out.d, |rec| {
+                    mutate_puzzle(&mut rec.handles[0].t_i_z)
+                });
+                !verify(pp, &r, message, &sigma)
+            },
+            {
+                let r = mutate_record(&registry, &out.d, |rec| {
+                    mutate_puzzle(&mut rec.handles[0].t_i_tau)
+                });
+                !verify(pp, &r, message, &sigma)
+            },
+            {
+                let r = mutate_record(&registry, &out.d, |rec| {
+                    mutate_ciphertext(&mut rec.handles[0].e_i)
+                });
+                trace(pp, secrets, &r, message, &sigma).is_none()
+            },
+            {
+                let r = mutate_record(&registry, &out.d, |rec| rec.handles[0].nu_i[0] ^= 1);
+                !verify(pp, &r, message, &sigma)
+            },
+            {
+                let r = mutate_record(&registry, &out.d, |rec| {
+                    rec.handles[0].pi_i_bind.statement_digest[0] ^= 1
+                });
+                !verify(pp, &r, message, &sigma)
+            },
+            {
+                let mut bad = sigma.clone();
+                bad.z += Scalar::ONE;
+                !verify(pp, &registry, message, &bad)
+            },
+            {
+                let r = mutate_record(&registry, &out.d, |rec| {
+                    rec.handles[1].nu_i = rec.handles[0].nu_i
+                });
+                !verify(pp, &r, message, &sigma)
+            },
+            {
+                let r = mutate_record(&registry, &out.d, |rec| {
+                    rec.handles.pop();
+                });
+                !verify(pp, &r, message, &sigma)
+            },
+            {
+                let r = mutate_record(&registry, &out.d, |rec| {
+                    rec.handles[0] = other_handle.clone()
+                });
+                !verify(pp, &r, message, &sigma)
+            },
+            trace(pp, &wrong_secrets, &registry, message, &sigma).is_none(),
+            {
+                let mut bad = sigma.clone();
+                bad.tau += Scalar::ONE;
+                !verify(pp, &registry, message, &bad)
+            },
+            sign_encap(
+                pp,
+                secrets,
+                &mut Registry::default(),
+                message,
+                &[1, 1, 2, 3],
+            )
+            .is_none(),
+            {
+                let r = mutate_record(&registry, &out.d, |rec| {
+                    rec.handles.push(rec.handles[0].clone());
+                });
+                !verify(pp, &r, message, &sigma)
+            },
+            trace(pp, &wrong_secrets, &registry, message, &sigma).is_none(),
+        ];
+        for (idx, value) in values.iter().enumerate() {
+            counts[idx] += *value as usize;
+        }
+    }
+    Some(
+        names
+            .iter()
+            .zip(counts)
+            .map(|(name, count)| ((*name).to_string(), count))
+            .collect(),
+    )
 }
 
 #[cfg(test)]

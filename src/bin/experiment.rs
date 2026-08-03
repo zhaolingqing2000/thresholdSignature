@@ -17,6 +17,7 @@ use threshold_signature::construction::{
     tracing_ciphertext_bytes, verify, AdditivePuzzle, AuxiliaryHandle, BindingProof,
     ConstructionPublicParams, ConstructionSecretState, Registry, SessionDescriptor,
 };
+use threshold_signature::crypto::manifest::BackendManifest;
 use threshold_signature::hash::{enc_point, g0, g1, hsig_bound};
 use threshold_signature::keygen::{kgen, setup};
 use threshold_signature::nizk::sig_verify;
@@ -303,7 +304,7 @@ fn stats(values: &[f64]) -> Stats {
     let mut sorted = values.to_vec();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let mid = sorted.len() / 2;
-    let median = if sorted.len() % 2 == 0 {
+    let median = if sorted.len().is_multiple_of(2) {
         (sorted[mid - 1] + sorted[mid]) / 2.0
     } else {
         sorted[mid]
@@ -361,7 +362,7 @@ fn write_csv(rows: &[SummaryRow]) -> std::io::Result<()> {
     fs::write("results/experiment_results.csv", csv)
 }
 
-fn row<'a>(rows: &'a [SummaryRow], mode: Mode, s: usize) -> Option<&'a SummaryRow> {
+fn row(rows: &[SummaryRow], mode: Mode, s: usize) -> Option<&SummaryRow> {
     rows.iter().find(|r| r.mode == mode && r.signer_count == s)
 }
 
@@ -588,9 +589,9 @@ fn sample_descriptor_and_handle(
     let z = random_scalar();
     let tau = random_scalar();
     let c_i = enc_point(&commitment_for_benchmark(pp, &z, &tau));
-    let t_i_z = puzzle_gen(&z);
-    let t_i_tau = puzzle_gen(&tau);
-    let e_i = ibe_encrypt(&pp.ibe_public, MESSAGE, 1);
+    let t_i_z = puzzle_gen(pp, &z);
+    let t_i_tau = puzzle_gen(pp, &tau);
+    let e_i = ibe_encrypt(&pp.ibe_public, MESSAGE, &d, 1);
     let nu_i = nullifier(&d, &secrets.secret_key_shares[0].s);
     let desc = SessionDescriptor { d, m, a_hat, ell };
     let mut handle = AuxiliaryHandle {
@@ -627,7 +628,7 @@ fn run_component_benchmarks() -> Vec<ComponentRow> {
             time_micro(
                 || {
                     let z = random_scalar();
-                    black_box(puzzle_gen(&z));
+                    black_box(puzzle_gen(&pp, &z));
                 },
                 MICRO_TRIALS,
             ),
@@ -636,7 +637,7 @@ fn run_component_benchmarks() -> Vec<ComponentRow> {
             "IBE encryption",
             time_micro(
                 || {
-                    black_box(ibe_encrypt(&pp.ibe_public, MESSAGE, 1));
+                    black_box(ibe_encrypt(&pp.ibe_public, MESSAGE, &[7u8; 32], 1));
                 },
                 MICRO_TRIALS,
             ),
@@ -667,14 +668,16 @@ fn run_component_benchmarks() -> Vec<ComponentRow> {
 
 fn run_delay_benchmarks() -> Vec<DelayRow> {
     let delays = [0_u64, 1_000, 5_000, 10_000, 20_000];
-    let puzzles: Vec<AdditivePuzzle> = (0..16).map(|_| puzzle_gen(&random_scalar())).collect();
-    let aggregate = puzzle_eval(&puzzles);
+    let (pp, _, _) = setup_construction(20, 4);
+    let puzzles: Vec<AdditivePuzzle> = (0..16).map(|_| puzzle_gen(&pp, &random_scalar())).collect();
+    let aggregate = puzzle_eval(&pp, &puzzles);
     delays
         .iter()
         .map(|&delay_iters| {
             let st = time_micro(
                 || {
                     black_box(puzzle_solve_with_delay_for_benchmark(
+                        &pp,
                         &aggregate,
                         delay_iters,
                     ));
@@ -803,9 +806,9 @@ fn run_phase_breakdown() -> Vec<PhaseRow> {
                     let c_i = enc_point(&commitment_for_benchmark(&pp, &z, &tau));
                     let mut h = AuxiliaryHandle {
                         c_i,
-                        t_i_z: puzzle_gen(&z),
-                        t_i_tau: puzzle_gen(&tau),
-                        e_i: ibe_encrypt(&pp.ibe_public, MESSAGE, 1),
+                        t_i_z: puzzle_gen(&pp, &z),
+                        t_i_tau: puzzle_gen(&pp, &tau),
+                        e_i: ibe_encrypt(&pp.ibe_public, MESSAGE, &[9u8; 32], 1),
                         nu_i: nullifier(&[9u8; 32], &secrets.secret_key_shares[0].s),
                         pi_i_bind: BindingProof {
                             statement_digest: [0u8; 32],
@@ -836,7 +839,7 @@ fn run_phase_breakdown() -> Vec<PhaseRow> {
                 || {
                     let z = random_scalar();
                     let tau = random_scalar();
-                    black_box((puzzle_gen(&z), puzzle_gen(&tau)));
+                    black_box((puzzle_gen(&pp, &z), puzzle_gen(&pp, &tau)));
                 },
                 MICRO_TRIALS,
             ),
@@ -845,7 +848,7 @@ fn run_phase_breakdown() -> Vec<PhaseRow> {
             "IBE encryption",
             time_micro(
                 || {
-                    black_box(ibe_encrypt(&pp.ibe_public, MESSAGE, 1));
+                    black_box(ibe_encrypt(&pp.ibe_public, MESSAGE, &[9u8; 32], 1));
                 },
                 MICRO_TRIALS,
             ),
@@ -877,7 +880,7 @@ fn run_phase_breakdown() -> Vec<PhaseRow> {
                     let mut reg = Registry::default();
                     let out = sign_encap(&pp, &secrets, &mut reg, MESSAGE, &signer_set).unwrap();
                     let rec = reg.retrieve_session_record(&out.d).unwrap();
-                    black_box(aggregate_puzzles_for_benchmark(rec));
+                    black_box(aggregate_puzzles_for_benchmark(&pp, rec));
                 },
                 100,
             ),
@@ -886,8 +889,8 @@ fn run_phase_breakdown() -> Vec<PhaseRow> {
             "Delayed Open PSolve",
             time_micro(
                 || {
-                    let p = puzzle_gen(&random_scalar());
-                    black_box(puzzle_solve(&p));
+                    let p = puzzle_gen(&pp, &random_scalar());
+                    black_box(puzzle_solve(&pp, &p));
                 },
                 MICRO_TRIALS,
             ),
@@ -1485,6 +1488,7 @@ protocol-level structure measured here.
 
 fn main() -> std::io::Result<()> {
     fs::create_dir_all("results")?;
+    BackendManifest::current().print();
     let mut rows = Vec::new();
     println!("correctness: S,mode,trials,success,failure");
     for &s in SIGNER_SET_SIZES {
